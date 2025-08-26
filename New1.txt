@@ -1,0 +1,104 @@
+1. git clone https://github.com/harishrock09/Sample1.git
+    https://github.com/akshu20791/addressbook-cicd-project
+2. terraform download link-->
+wget -O - https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(grep -oP '(?<=UBUNTU_CODENAME=).*' /etc/os-release || lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install terraform
+=== vi connection.tf
+    provider "aws" {
+    region     = "us-west-2"
+    access_key = "my-access-key"
+    secret_key = "my-secret-key"
+    }
+=== vi ec2.tf
+   resource "aws_instance" "Jenkins Master" {
+    ami           = data.aws_ami.ubuntu.id
+    instance_type = "t3.micro"
+
+     tags = {
+    Name = "Jenkins Master"
+       }
+    }
+
+3. Ansible --> Go through Doc 
+     Steps:
+         3 - both machines
+         4-5 Jenkins master
+         6-10 both machines
+         11-12master machine
+4. Jenkins--> while creating ec2 instance inbound rules-- Custom TCP, IPv4, Anywhere, port-8080
+    jenkins install link:  wget https://raw.githubusercontent.com/sampathkumarkanumolu/Deployment-script/refs/heads/main/jenkins.sh
+    chmod +x jenkins.sh
+    ./ jenkins.sh
+   -----------
+
+
+pipeline {
+    agent any
+
+    environment {
+        APP_SERVER = "44.203.206.98"        // Application node public IP
+        APP_USER   = "devops"               // SSH user
+        SSH_KEY    = credentials('app-ssh-key') // Jenkins credential ID
+        GIT_REPO   = "https://github.com/Amruth-B/assemment-addressbook.git"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'master', url: "${GIT_REPO}"
+            }
+        }
+
+        stage('Build with Maven') {
+            steps {
+                sh 'mvn clean package -DskipTests'
+            }
+        }
+
+        stage('Setup Tomcat on Application Node') {
+            steps {
+                sh '''
+                ssh -i $SSH_KEY -o StrictHostKeyChecking=no ${APP_USER}@${APP_SERVER} '
+                    # Install Tomcat if not already present
+                    if [ ! -d /opt/tomcat9 ]; then
+                        sudo apt-get update -y
+                        sudo apt-get install -y openjdk-11-jdk wget
+                        wget https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.75/bin/apache-tomcat-9.0.75.tar.gz
+                        sudo mkdir -p /opt/tomcat9
+                        sudo tar xzvf apache-tomcat-9.0.75.tar.gz -C /opt/tomcat9 --strip-components=1
+                    fi
+
+                    # Give ownership to devops user
+                    sudo chown -R devops:devops /opt/tomcat9
+                    chmod +x /opt/tomcat9/bin/*.sh
+                '
+                '''
+            }
+        }
+
+        stage('Deploy WAR to Tomcat') {
+            steps {
+                sh '''
+                # Stop Tomcat if running (ignore errors)
+                ssh -i $SSH_KEY -o StrictHostKeyChecking=no ${APP_USER}@${APP_SERVER} "/opt/tomcat9/bin/shutdown.sh || true"
+
+                # Copy WAR file
+                scp -i $SSH_KEY -o StrictHostKeyChecking=no target/*.war ${APP_USER}@${APP_SERVER}:/opt/tomcat9/webapps/addressbook.war
+
+                # Start Tomcat
+                ssh -i $SSH_KEY -o StrictHostKeyChecking=no ${APP_USER}@${APP_SERVER} "/opt/tomcat9/bin/startup.sh"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Deployment successful! App is running at http://${APP_SERVER}:8080/addressbook"
+        }
+        failure {
+            echo "❌ Deployment failed. Check logs."
+        }
+    }
+}
